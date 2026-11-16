@@ -87,6 +87,8 @@ body.panel-closed #stage { right: 0; }
   border: 5px solid transparent; border-top-color: rgba(255,255,255,.95); border-bottom: 0; }
 .pin.behind { opacity: .35; }
 .pin.auto { font-size: 12px; padding: 2px 6px; background: rgba(255,255,255,.85); }
+body.hide-auto-pins .pin.auto:not(.search) { display: none !important; }   /* 🏷 labels switched off */
+#sheetBar { display: none; }
 
 /* ---------- panel ---------- */
 #panel { position: fixed; top: var(--top); right: 0; bottom: 0; width: var(--panel); background: var(--bg2);
@@ -162,21 +164,39 @@ body.panel-closed #panel { display: none; }
 
 /* ---------- phone portrait: bottom sheet ---------- */
 @media (max-width: 900px) and (orientation: portrait) {
-  :root { --panel: 0px; --sheet: 44vh; }
+  :root { --panel: 0px; --sheet: 46vh; }
   #panes { padding-bottom: 4px; }
 }
 @media (max-width: 600px) and (orientation: portrait) {
   .brand span, #models button small { display: none; }
 }
+/* The 3D view gets as much of the screen as possible: slim header, one row of icon-only tools floating
+   over the model, and a bottom sheet that shrinks to a one-line bar (tap it, or ☰, to open the menu). */
 @media (max-width: 900px) and (orientation: portrait) {
+  :root { --top: 44px; --bar: 44px; }
+  #top { gap: 6px; padding: 0 6px; }
+  #models button { padding: 4px 10px; }
   #stage { right: 0; bottom: var(--sheet); }
-  body.panel-closed #stage { bottom: 0; }
+  body.panel-closed #stage { bottom: calc(var(--bar) + var(--safe-b)); }
   #panel { top: auto; left: 0; width: auto; height: var(--sheet); border-left: 0; border-top: 1px solid var(--line);
     border-radius: 14px 14px 0 0; }
-  #tools { flex-direction: row; flex-wrap: wrap; right: 8px; }
-  #tools button { width: 46px; font-size: 16px; }
-  #cutBar { left: 8px; right: 8px; top: 64px; }
-  #search { left: 8px; right: 8px; }
+  body.panel-closed #panel { display: flex; height: calc(var(--bar) + var(--safe-b)); }
+  body.panel-closed #tabs, body.panel-closed #panes, body.panel-closed #credit { display: none; }
+  #sheetBar { display: flex; align-items: center; gap: 8px; flex: none; height: var(--bar); width: 100%;
+    padding: 0 14px; border: 0; border-bottom: 1px solid var(--line); border-radius: 14px 14px 0 0;
+    background: var(--bg3); text-align: left; font-size: 14px; }
+  body.panel-closed #sheetBar { border-bottom: 0; padding-bottom: var(--safe-b); height: calc(var(--bar) + var(--safe-b)); }
+  #sheetTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sheetBar .chev { color: var(--acc); font-size: 12px; }
+  #tabs { padding: 6px 8px; }
+  #tools { flex-direction: row; flex-wrap: nowrap; left: 6px; right: 6px; top: 6px; gap: 4px; overflow-x: auto;
+    scrollbar-width: none; }
+  #tools::-webkit-scrollbar { display: none; }
+  #tools button { width: 38px; height: 38px; flex: none; justify-content: center; font-size: 17px; padding: 0;
+    background: rgba(30,44,59,.75); }
+  #tools button small { display: none; }
+  #cutBar { left: 6px; right: 6px; top: 50px; }
+  #search { left: 6px; right: 6px; top: 6px; }
   #hud { top: auto; bottom: 8px; right: 8px; font-size: 12px; min-width: 0; }
   #chip { bottom: 8px; }
   .presets { grid-template-columns: 1fr 1fr; }
