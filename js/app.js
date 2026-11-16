@@ -143,6 +143,7 @@ function visibleBox(onlyShown = true) {
   return box;
 }
 function frame(box, dir, animate = true) {
+  S.lastFrame = box.clone();
   const sph = box.getBoundingSphere(new THREE.Sphere());
   const d = new THREE.Vector3(...(dir || camera.position.clone().sub(controls.target).normalize().toArray())).normalize();
   // fit the 8 box corners to both the horizontal and vertical field of view
@@ -294,6 +295,7 @@ $('#tools').addEventListener('click', (e) => {
   if (t === 'xray') { S.xray = !S.xray; e.target.closest('button').classList.toggle('on', S.xray); applyAll(); }
   if (t === 'cut') setCut((S.cut + 1) % CUTS.length);
   if (t === 'unpin') clearPins();
+  if (t === 'labels') setAutoLabels(!S.autoLabels);
   if (t === 'snap') snapshot();
   if (t === 'search') openSearch(!!$('#search').hidden);
 });
@@ -340,7 +342,7 @@ function pickResult(r) {
   const size = (p) => { const b = new THREE.Box3(); p.meshes.forEach((x) => b.expandByObject(x)); return b.getSize(new THREE.Vector3()).length(); };
   const ranked = [...r.parts].sort((a, b) => size(b) - size(a));
   if (r.parts.size === 1) select(ranked[0]);
-  else { select(null); addPin(ranked[0], null, true, r.label); }
+  else { select(null); addPin(ranked[0], null, true, r.label); S.pins[S.pins.length - 1].el.classList.add('search'); }
   openSearch(false);
 }
 $('#searchInput').addEventListener('input', renderSearch);
@@ -376,12 +378,38 @@ function snapshot() {
 }
 
 // ------------------------------------------------------------------ panel: tabs
-$('#panelToggle').addEventListener('click', () => {
-  const closed = document.body.classList.toggle('panel-closed');
+// On phones held upright the panel is a bottom sheet; "closed" shrinks it to a one-line bar so the
+// model gets almost the whole screen. Choosing a clinical view shrinks it automatically.
+const phonePortrait = matchMedia('(max-width: 900px) and (orientation: portrait)');
+function setPanelClosed(closed, reframe = true) {
+  document.body.classList.toggle('panel-closed', closed);
   $('#panelToggle').setAttribute('aria-expanded', String(!closed));
+  $('#sheetBar .chev').textContent = closed ? '▲' : '▼';
   store.set('panelClosed', closed);
+  resize();                                         // new canvas shape now, so framing uses it
+  if (reframe && S.model && S.lastFrame) frame(S.lastFrame);
+}
+$('#panelToggle').addEventListener('click', () => setPanelClosed(!document.body.classList.contains('panel-closed')));
+$('#sheetBar').addEventListener('click', () => {
+  const open = document.body.classList.contains('panel-closed');
+  setPanelClosed(!open);
+  if (open && activePreset) {                       // reopened after picking a view: jump to its notes
+    const note = [...$$('.pane:not([hidden]) .preset-note')].find((n) => n.childElementCount);
+    note?.scrollIntoView({ block: 'start' });
+  }
 });
-if (store.get('panelClosed', false)) document.body.classList.add('panel-closed');
+function setSheetTitle(text) { $('#sheetTitle').textContent = text || '選單 Menu'; }
+if (store.get('panelClosed', false)) setPanelClosed(true, false);
+
+// name labels that clinical views place automatically: on/off (labels pinned by hand always show)
+const LABELS_DEFAULT = false;   // public copy: name labels start off
+function setAutoLabels(on) {
+  S.autoLabels = on;
+  document.body.classList.toggle('hide-auto-pins', !on);
+  $('[data-tool="labels"]').classList.toggle('on', on);
+  store.set('autoLabels', on);
+}
+setAutoLabels(store.get('autoLabels', LABELS_DEFAULT));
 $('#credit').addEventListener('click', () => $('#credit').classList.toggle('open'));
 // opened from the Rehab Games menu (home-screen app has no back button): show a way back
 try {
@@ -412,6 +440,7 @@ function showTab(id) {
 let activePreset = null;
 function clearPresetUI() {
   activePreset = null;
+  setSheetTitle(null);
   clearPins(true);
   if (S.model) for (const p of S.model.parts.values()) for (const x of p.meshes) if (x.userData.baseScale) x.scale.copy(x.userData.baseScale);
   $$('.presets button.on').forEach((b) => b.classList.remove('on'));
@@ -432,7 +461,14 @@ function presetPane(groups) {
       det.addEventListener('toggle', () => store.set(key, det.open));
       for (const it of g.items) {
         // the note appears right under the group that was tapped, so it is visible on phones
-        const b = h('button', { onclick: () => { grid.after(note); applyPreset(it, note); $$('.presets button.on').forEach((x) => x.classList.remove('on')); b.classList.add('on'); } },
+        const b = h('button', { onclick: () => {
+          grid.after(note);
+          setSheetTitle(`${it.zh} ${it.en} · 說明 Notes`);
+          if (phonePortrait.matches) setPanelClosed(true, false);   // model full screen; the bar reopens the notes
+          applyPreset(it, note);
+          $$('.presets button.on').forEach((x) => x.classList.remove('on'));
+          b.classList.add('on');
+        } },
           it.zh, h('small', {}, it.en));
         grid.append(b);
       }
