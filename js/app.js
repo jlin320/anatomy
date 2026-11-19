@@ -26,6 +26,11 @@ const store = {
   set(k, v) { try { localStorage.setItem('anatomy.' + k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
 
+// ------------------------------------------------------------------ site settings
+// (tools/build_public_anatomy.ps1 changes these for the public GitHub copy)
+const SHARE_BASE = '';   // QR codes lead to the public copy: patients' phones can't reach the intranet
+const USAGE_URL = '';                       // which views get opened (no patient data); '' = off
+
 // ------------------------------------------------------------------ renderer / scene
 const canvas = $('#view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -202,6 +207,147 @@ $('#chip').addEventListener('click', (e) => {
   applyAll();
 });
 
+// ------------------------------------------------------------------ links to a view (#body/cufftear)
+function track(key) {
+  if (!USAGE_URL) return;
+  try { fetch(USAGE_URL, { method: 'POST', body: key, keepalive: true }).catch(() => {}); } catch { /* offline */ }
+}
+function setHash(v) {
+  S.view = v;
+  if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
+  track(v);
+}
+// opens "#model/view" (from a QR code, a bookmark or the rehab programme); false if it names no model here
+async function openLink(hash) {
+  const [model, view] = decodeURIComponent((hash || '').replace(/^#/, '')).split('/');
+  if (!LOADERS[model] || !$(`#models [data-model="${model}"]`)) return false;
+  if (S.model?.id !== model) await switchModel(model);
+  if (!view || S.model?.id !== model) return true;
+  const b = $(`.presets button[data-id="${CSS.escape(view)}"], .motions button[data-id="${CSS.escape(view)}"]`);
+  if (b) {
+    const d = b.closest('details');
+    if (d) d.open = true;
+    b.click();
+  }
+  return true;
+}
+addEventListener('hashchange', () => { if (location.hash.slice(1) !== S.view) openLink(location.hash); });
+
+// ------------------------------------------------------------------ share: QR code to this view
+function openShare() {
+  const view = S.view || S.model?.id || '';
+  const move = view.startsWith('move');
+  const base = SHARE_BASE && !move ? SHARE_BASE : location.origin + location.pathname;
+  const url = base + (view ? '#' + view : '');
+  const qr = qrcode(0, 'M');
+  qr.addData(url);
+  qr.make();
+  const n = qr.getModuleCount(), k = 8, cv = $('#qr'), g = cv.getContext('2d');
+  cv.width = cv.height = (n + 8) * k;
+  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+  g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) g.fillRect((c + 4) * k, (r + 4) * k, k, k);
+  $('#shareTitle').textContent = activePreset ? `${activePreset.zh} ${activePreset.en}` : (S.model ? $(`#models [data-model="${S.model.id}"]`)?.textContent : '');
+  $('#shareUrl').value = url;
+  $('#shareNote').textContent = SHARE_BASE && !move
+    ? '請病人用自己的手機相機掃描，在家也能看同一個畫面與說明（公開網站，不含任何病人資料）。Patients scan this with their own phone camera to see the same view and notes at home (public website, no patient data).'
+    : move && SHARE_BASE ? '動作示範只在院內網路提供，手機需連上院內 Wi-Fi。Movement demos are only on the hospital network: the phone must be on the hospital Wi-Fi.'
+      : '用手機相機掃描開啟此畫面。Scan with a phone camera to open this view.';
+  $('#share').hidden = false;
+}
+$('#shareClose').addEventListener('click', () => { $('#share').hidden = true; });
+$('#share').addEventListener('click', (e) => { if (e.target.id === 'share') $('#share').hidden = true; });
+$('#shareCopy').addEventListener('click', async () => {
+  const inp = $('#shareUrl');
+  try { await navigator.clipboard.writeText(inp.value); } catch { inp.select(); document.execCommand?.('copy'); }
+  $('#shareCopy').textContent = '已複製 Copied ✓';
+  setTimeout(() => { $('#shareCopy').textContent = '複製連結 Copy link'; }, 1500);
+});
+
+// ------------------------------------------------------------------ lesion markers (what the disease looks like)
+// A preset's `lesions`: [{ at: structure name, pos: [x, y, z] as fractions of its half-size from its centre
+// (x = patient's left, y = up, z = front), size: radius in metres, label }]. Drawn on top so they show through bone.
+const lesionGroup = new THREE.Group();
+scene.add(lesionGroup);
+const lesionMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.6, depthTest: false });
+function clearLesions() {
+  lesionGroup.clear();
+  S.pins.filter((x) => x.lesion).forEach((x) => x.el.remove());
+  S.pins = S.pins.filter((x) => !x.lesion);
+}
+function addLesions(list, m) {
+  m.root.updateMatrixWorld(true);
+  for (const L of list) {
+    const p = [...m.parts.values()].find((q) => q.en === L.at);
+    if (!p) continue;
+    const box = new THREE.Box3();
+    p.meshes.forEach((x) => box.expandByObject(x));
+    const half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    const pos = box.getCenter(new THREE.Vector3()).add(new THREE.Vector3(...(L.pos || [0, 0, 0])).multiply(half));
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(L.size || 0.008, 24, 16), lesionMat);
+    ball.position.copy(pos);
+    ball.renderOrder = 10;
+    lesionGroup.add(ball);
+    const el = h('div', { class: 'pin lesion' }, L.label || '病灶 Lesion');
+    $('#pins').append(el);
+    S.pins.push({ p: { state: 'show' }, mesh: ball, local: new THREE.Vector3(), el, model: S.model, lesion: true });
+  }
+}
+
+// ------------------------------------------------------------------ drawing pen (circle the spot from today's report)
+const ink = $('#ink');
+let inkOn = false, inkLast = null;
+function setInk(on) {
+  inkOn = on;
+  ink.hidden = !on;
+  controls.enabled = !on;
+  $('[data-tool="pen"]').classList.toggle('on', on);
+  if (!on) return;
+  const r = ink.getBoundingClientRect(), d = devicePixelRatio || 1, g = ink.getContext('2d');
+  ink.width = Math.round(r.width * d); ink.height = Math.round(r.height * d);    // also clears old drawings
+  g.setTransform(d, 0, 0, d, 0, 0);
+  g.lineCap = g.lineJoin = 'round'; g.lineWidth = 4; g.strokeStyle = '#ff3b3b';
+}
+const inkAt = (e) => { const r = ink.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+ink.addEventListener('pointerdown', (e) => {
+  ink.setPointerCapture(e.pointerId);
+  inkLast = inkAt(e);
+  const g = ink.getContext('2d');
+  g.beginPath(); g.arc(inkLast[0], inkLast[1], 2, 0, Math.PI * 2); g.fillStyle = '#ff3b3b'; g.fill();
+});
+ink.addEventListener('pointermove', (e) => {
+  if (!inkLast) return;
+  const g = ink.getContext('2d'), p = inkAt(e);
+  g.beginPath(); g.moveTo(...inkLast); g.lineTo(...p); g.stroke();
+  inkLast = p;
+});
+for (const ev of ['pointerup', 'pointercancel']) ink.addEventListener(ev, () => { inkLast = null; });
+
+// ------------------------------------------------------------------ consult-room mode: full screen, big text, caption
+function setPresent(on) {
+  document.body.classList.toggle('present', on);
+  $('[data-tool="present"]').classList.toggle('on', on);
+  try {
+    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  } catch { /* iPhone Safari: no full-screen API, the layout still fills the screen */ }
+  updateCaption();
+  resize();
+  if (S.model && S.lastFrame) frame(S.lastFrame);
+}
+function updateCaption() {
+  const c = $('#caption');
+  const on = document.body.classList.contains('present') && activePreset;
+  c.hidden = !on;
+  if (!on) return;
+  $('#captionTitle').textContent = `${activePreset.zh} ${activePreset.en}`;
+  $('#captionNote').textContent = activePreset.note || '';
+}
+$('#caption').addEventListener('click', () => $('#caption').classList.toggle('open'));
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && document.body.classList.contains('present')) setPresent(false);
+});
+
 // ------------------------------------------------------------------ pins (labels on the model)
 function addPin(p, point, auto = false, label = null) {
   let local;
@@ -294,8 +440,11 @@ $('#tools').addEventListener('click', (e) => {
   if (t === 'showall') { setStates(() => 'show'); for (const p of S.model.parts.values()) p.color.copy(p.base); S.model.recolor?.(); clearPresetUI(); applyAll(); }
   if (t === 'xray') { S.xray = !S.xray; e.target.closest('button').classList.toggle('on', S.xray); applyAll(); }
   if (t === 'cut') setCut((S.cut + 1) % CUTS.length);
-  if (t === 'unpin') clearPins();
+  if (t === 'unpin') { clearPins(); clearLesions(); }
   if (t === 'labels') setAutoLabels(!S.autoLabels);
+  if (t === 'share') openShare();
+  if (t === 'pen') setInk(!inkOn);
+  if (t === 'present') setPresent(!document.body.classList.contains('present'));
   if (t === 'snap') snapshot();
   if (t === 'search') openSearch(!!$('#search').hidden);
 });
@@ -368,7 +517,13 @@ function resetView() {
 
 function snapshot() {
   renderer.render(scene, camera);
-  canvas.toBlob((blob) => {
+  // the saved picture includes anything drawn with the pen
+  const out = document.createElement('canvas');
+  out.width = canvas.width; out.height = canvas.height;
+  const g = out.getContext('2d');
+  g.drawImage(canvas, 0, 0);
+  if (inkOn) g.drawImage(ink, 0, 0, out.width, out.height);
+  out.toBlob((blob) => {
     const a = h('a', { href: URL.createObjectURL(blob) });
     const d = new Date(), z = (n) => String(n).padStart(2, '0');
     a.download = `anatomy-${S.model.id}-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.png`;
@@ -441,6 +596,8 @@ let activePreset = null;
 function clearPresetUI() {
   activePreset = null;
   setSheetTitle(null);
+  clearLesions();
+  updateCaption();
   clearPins(true);
   if (S.model) for (const p of S.model.parts.values()) for (const x of p.meshes) if (x.userData.baseScale) x.scale.copy(x.userData.baseScale);
   $$('.presets button.on').forEach((b) => b.classList.remove('on'));
@@ -461,8 +618,9 @@ function presetPane(groups) {
       det.addEventListener('toggle', () => store.set(key, det.open));
       for (const it of g.items) {
         // the note appears right under the group that was tapped, so it is visible on phones
-        const b = h('button', { onclick: () => {
+        const b = h('button', { 'data-id': it.id, onclick: () => {
           grid.after(note);
+          setHash(`${S.model.id}/${it.id}`);
           setSheetTitle(`${it.zh} ${it.en} · 說明 Notes`);
           if (phonePortrait.matches) setPanelClosed(true, false);   // model full screen; the bar reopens the notes
           applyPreset(it, note);
@@ -478,12 +636,14 @@ function presetPane(groups) {
       h('button', { onclick: () => $$('details.preset-group', pane).forEach((d) => { d.open = true; }) }, '全部展開 Expand all'),
       h('button', { onclick: () => $$('details.preset-group', pane).forEach((d) => { d.open = false; }) }, '全部收合 Collapse all')));
     pane.append(note);
+    if (USAGE_URL) pane.append(h('p', { class: 'note' }, h('a', { href: 'usage.html', class: 'usage-link' }, '📊 使用統計 Which views are used')));
   };
 }
 function applyPreset(it, noteEl) {
   const m = S.model;
   activePreset = it;
   clearPins(true);
+  clearLesions();
   const hit = matchParts(m, it.show, it.within, it.leafOnly);
   const alsoHit = new Set();
   if (it.also) for (const [pats, within] of it.also) for (const p of matchParts(m, pats, within, it.leafOnly)) { hit.add(p); alsoHit.add(p); }
@@ -538,6 +698,8 @@ function applyPreset(it, noteEl) {
   if (it.note) noteEl.append(h('div', {}, it.note));
   if (it.color) noteEl.append(h('div', { class: 'legend' }, it.color.filter((c) => c[2]).map(([, col, lab]) => h('span', {}, h('i', { style: `background:${col}` }), lab))));
   if (it.ekg) noteEl.append(h('div', { class: 'ekg' }, h('b', {}, '心電圖 EKG：'), it.ekg));
+  if (it.lesions) noteEl.append(h('div', { class: 'review' }, '紅色圓點為病灶示意位置，實際位置依個人影像為準。Red dots show a typical lesion site; the patient’s own images decide.'));
+  noteEl.append(h('div', { class: 'review' }, it.reviewed ? `✓ 臨床審閱 Clinically reviewed: ${it.reviewed}` : '內容尚待臨床審閱 Not yet clinically reviewed'));
   // `pins`: name labels placed automatically (they stay readable even when the organ is behind others)
   if (it.pins) {
     m.root.updateMatrixWorld(true);
@@ -548,9 +710,11 @@ function applyPreset(it, noteEl) {
       if (p) addPin(p, null, true, label);
     }
   }
+  if (it.lesions) addLesions(it.lesions, m);
   m.setRhythm?.(it.rhythm || null);
   m.setDermatome?.(!!it.dermatome);
   applyAll();
+  updateCaption();
 }
 
 // structures tree pane --------------------------------------------------
@@ -710,7 +874,7 @@ const LOADERS = {
     return m;
   },
   move: () => loadMovement({ THREE, loader, makePart, applyAll, select, refreshChipInfo, fetchJSON, h, $, $$, scene, store, frameAll: (dir) => frame(visibleBox(), VIEWS[dir] || dir),
-    frameObject: (o, dir) => frame(new THREE.Box3().setFromObject(o), VIEWS[dir] || dir) }),
+    frameObject: (o, dir) => frame(new THREE.Box3().setFromObject(o), VIEWS[dir] || dir), onMotion: (id) => setHash(`move/${id}`) }),
 };
 const ctxApi = { treePane, presetPane };
 export { ctxApi };
@@ -726,6 +890,9 @@ async function switchModel(id) {
   $$('#models button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.model === id)));
   store.set('model', id);
   select(null);
+  clearLesions();
+  activePreset = null;
+  updateCaption();
   if (S.model) { S.model.root.visible = false; S.model.deactivate?.(); }
   showMessage(null);
   let m = S.models[id];
@@ -762,6 +929,7 @@ async function switchModel(id) {
   applyAll();
   resize();
   frame(visibleBox(), VIEWS[m.defaultView || 'front'], false);
+  setHash(id);
 }
 $('#models').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) switchModel(b.dataset.model); });
 
@@ -778,4 +946,9 @@ renderer.setAnimationLoop((now) => {
 
 resize();
 window.__anatomy = { S, camera, controls, visibleBox };   // for debugging in the browser console
-switchModel(document.querySelector(`[data-model="${store.get('model', 'brain')}"]`) ? store.get('model', 'brain') : 'brain');
+// a link like #body/cufftear opens that view; otherwise the last model used on this device
+openLink(location.hash).then((ok) => {
+  if (ok) return;
+  const last = store.get('model', 'brain');
+  switchModel($(`#models [data-model="${last}"]`) ? last : 'brain');
+});

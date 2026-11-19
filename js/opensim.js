@@ -714,6 +714,7 @@ export async function loadMovement(ctx) {
   const P = { mo: null, phase: 0, playing: false, speed: 1, dirty: true, manual: false };
   function chooseMotion(mo) {
     P.mo = mo; P.phase = 0; P.manual = false;
+    ctx.onMotion?.(mo.id);
     buildProps(mo);
     setPose(mo, 0);
     P.playing = true; P.dirty = true;
