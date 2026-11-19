@@ -29,6 +29,8 @@
   <main id="stage">
     <canvas id="view" aria-label="3D view 3D 畫面"></canvas>
     <div id="pins" aria-hidden="true"></div>
+    <canvas id="ink" hidden aria-label="Drawing layer 畫筆"></canvas>
+    <div id="caption" hidden><b id="captionTitle"></b><span class="more">說明 Notes ▴</span><div id="captionNote"></div></div>
     <div id="loading" hidden><div class="spin"></div><span>載入中 Loading…</span></div>
     <div id="message" hidden></div>
 
@@ -55,7 +57,20 @@
       <button data-tool="cut" title="Cut plane 剖面">⊘<small id="cutLabel">剖面</small></button>
       <button data-tool="labels" title="Name labels on/off 名稱標籤">🏷<small>標籤</small></button>
       <button data-tool="unpin" title="Clear labels 清除標籤">⌫<small>清標籤</small></button>
+      <button data-tool="pen" title="Draw on the screen 畫筆（關閉即清除）">✎<small>畫筆</small></button>
+      <button data-tool="share" title="Share / QR code 分享">⇪<small>分享</small></button>
+      <button data-tool="present" title="Consult-room mode: full screen, big text 簡報模式">⛶<small>簡報</small></button>
       <button data-tool="snap" title="Save image 存圖">⎙<small>存圖</small></button>
+    </div>
+    <div id="share" hidden>
+      <div class="share-box">
+        <h3>分享此畫面 Share this view</h3>
+        <canvas id="qr" aria-label="QR code"></canvas>
+        <p id="shareTitle"></p>
+        <input id="shareUrl" readonly aria-label="Link 連結">
+        <div class="row-btns"><button id="shareCopy">複製連結 Copy link</button><button id="shareClose">關閉 Close</button></div>
+        <p class="note" id="shareNote"></p>
+      </div>
     </div>
     <div id="search" hidden>
       <div class="search-bar">
@@ -77,6 +92,7 @@
     <footer id="credit"></footer>
   </aside>
 
+  <script src="vendor/qrcode/qrcode.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
