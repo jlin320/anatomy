@@ -207,8 +207,9 @@ export function addDermatomes(model, { THREE }) {
         const f = frac(p, S.fem), th = around(p, at(S.fem, f), outward(p));
         if (th < -55 && th > -160) return 'S2';                         // back of the thigh: long middle strip
         if (th <= -25 && th >= -55) return 'S1';                        // outer back strip, continues down the calf
-        // front: stripes twist down the thigh, from the outer hip to the inner knee
-        const fe = f - 0.4 * Math.cos(th * Math.PI / 180);
+        // front: stripes run from the upper outer thigh down and inward to the inner knee, so a band
+        // sits higher on the outer side and lower on the inner side (L1 groin, L2 front, L3 inner knee)
+        const fe = f + 0.25 * Math.cos(th * Math.PI / 180);
         return fe < 0.1 ? 'L1' : fe < 0.5 ? 'L2' : 'L3';
       }
       // Leg: L4 inner shin and inner calf down to the inner ankle, L5 outer shin (to the top of the foot),
