@@ -93,6 +93,17 @@ export function addDermatomes(model, { THREE }) {
   const distTo = (p, ax) => { const t = Math.max(0, Math.min(1, (ax.a.y - p.y) / (ax.len || 1))); return p.distanceTo(ax.a.clone().lerp(ax.b, t)); };
   const frac = (p, ax) => Math.max(0, Math.min(1, (ax.a.y - p.y) / (ax.len || 1)));
   const across = (p, c5, c1) => { const v = c1.clone().sub(c5); return p.clone().sub(c5).dot(v) / v.lengthSq(); };
+  const at = (ax, f) => ax.a.clone().lerp(ax.b, f);
+  // Angle around a limb, in degrees: 0 = lateral (thumb / fibula side in the anatomical position),
+  // 90 = front, ±180 = medial, -90 = back. `lat` points from the limb centre toward the lateral side.
+  const FRONT = new V(0, 0, 1);
+  const around = (p, centre, lat) => {
+    const d = p.clone().sub(centre); d.y = 0;
+    const l = lat.clone(); l.y = 0; l.normalize();
+    const fr = FRONT.clone().addScaledVector(l, -FRONT.dot(l)).normalize();
+    return Math.atan2(d.dot(fr), d.dot(l)) * 180 / Math.PI;
+  };
+  const outward = (p) => new V(Math.sign(p.x - x0) || 1, 0, 0);
   const L = {};
   for (const s of ['right', 'left']) {
     L[s] = {
@@ -102,6 +113,7 @@ export function addDermatomes(model, { THREE }) {
       mt1: ctr(`First metatarsal bone (${s})`), mt5: ctr(`Fifth metatarsal bone (${s})`),
     };
   }
+  const anus = ctr('Anal region') || (box('Coccyx') ? new V(x0, box('Coccyx').min.y - 0.02, 0) : null);
   const orb = ctr('Orbital region (right)') || ctr('Orbital region (left)');
   const oral = ctr('Oral region (right)') || ctr('Oral region (left)');
   const tempR = ctr('Temporal bone (right)'), mand = box('Mandible');
@@ -139,41 +151,62 @@ export function addDermatomes(model, { THREE }) {
     // upper limb
     // Limb sub-patches (bicipital grooves, femoral triangle, snuffbox…) lie on top of the larger
     // regions, so they use the same position rules — overlapping skin must get the same colour.
+    // Upper limb, anatomical position (palms forward): the thumb (preaxial) side runs C5 (arm) → C6
+    // (forearm, thumb); the hand is C6 thumb / C7 middle finger / C8 little finger; the little-finger
+    // (postaxial) side runs back up C8 (lower forearm) → T1 (upper forearm, elbow) → T2 (inner arm, axilla);
+    // C7 also takes the middle strip of the back of the forearm.
     if (/Regions of upper limb/.test(path)) {
       if (/Deltoid/.test(n)) return 'C5';
       if (/Regions of hand/.test(path) && S.mc1 && S.mc5) { const u = across(p, S.mc5, S.mc1); return u > 0.6 ? 'C6' : u > 0.28 ? 'C7' : 'C8'; }
-      if (/Brachial region/.test(path) && S.hum) {
-        // around the arm: outer side and outer half of the front -> C5 (axillary/lateral cutaneous), inner side -> T1/T2
-        const outward = new V(Math.sign(p.x - x0) || 1, 0, 0);
-        const c = S.hum.a.clone().lerp(S.hum.b, frac(p, S.hum));
-        const d = p.clone().sub(c); d.y = 0; d.normalize();
-        if (d.dot(outward) > -0.15) return 'C5';
-        return frac(p, S.hum) < 0.35 ? 'T2' : 'T1';
+      if (S.hum && p.y > S.hum.b.y + 0.01) {                            // upper arm
+        const f = frac(p, S.hum), th = around(p, at(S.hum, f), outward(p));
+        if (Math.cos(th * Math.PI / 180) > -0.3) return 'C5';
+        return f < 0.55 ? 'T2' : 'T1';
       }
       if (S.rad && S.uln) {                                             // elbow, forearm, wrist
-        if (distTo(p, S.rad) < distTo(p, S.uln)) return 'C6';
-        return frac(p, S.uln) > 0.5 ? 'C8' : 'T1';
+        const f = frac(p, S.rad);
+        const r = at(S.rad, f), u = at(S.uln, frac(p, S.uln));
+        const th = around(p, r.clone().add(u).multiplyScalar(0.5), r.clone().sub(u));
+        if (th < -55 && th > -125 && f > 0.25) return 'C7';            // middle of the back of the forearm
+        if (Math.cos(th * Math.PI / 180) > -0.1) return 'C6';
+        return f < 0.45 ? 'T1' : 'C8';
       }
       return 'C6';
     }
     // lower limb
     if (/Regions of lower limb/.test(path)) {
       if (/Gluteal/.test(n)) {
+        // rings around the anus: S3 inner buttock, S2 outer buttock; the top of the buttock is L1–L2
         const b = box(`Gluteal region (${side})`) || box(n);
         const h = b ? (p.y - b.min.y) / (b.max.y - b.min.y) : 0.5;
-        return h > 0.66 ? 'L2' : lat < 0.07 ? 'S3' : 'S2';
+        if (h > 0.72) return 'L2';
+        if (anus) return Math.hypot(p.x - anus.x, p.y - anus.y) < 0.085 ? 'S3' : 'S2';
+        return lat < 0.07 ? 'S3' : 'S2';
       }
-      if (/Anterior region of thigh|Femoral triangle|Hip region/.test(path + n) && S.fem) {
-        const f = frac(p, S.fem);
-        return f < 0.12 ? 'L1' : f < 0.5 ? 'L2' : 'L3';
-      }
-      if (/Posterior region of thigh|Popliteal|Posterior region of knee/.test(n)) return 'S2';
-      if (/Anterior region of knee/.test(n)) return 'L3';
       if (/Medial malleolus|Medial retromalleolar|Medial border of foot/.test(n)) return 'L4';
       if (/Lateral malleolus|Lateral retromalleolar|Lateral border of foot|Heel/.test(n)) return 'S1';
-      if (/Anterior region of leg|Anterior region of ankle/.test(n) && S.tib && S.fib) return distTo(p, S.fib) < distTo(p, S.tib) ? 'L5' : 'L4';
-      if (/Posterior region of leg/.test(n) && S.tib && S.fib) return distTo(p, S.fib) < distTo(p, S.tib) ? 'S1' : 'S2';
-      if (/Regions of foot|Hallucial/.test(path + n) && S.mt1 && S.mt5) {
+      const foot = /Regions of foot|Hallucial/.test(path + n);
+      // Thigh: oblique bands on the front running down and inward — L1 under the groin crease, L2 upper
+      // thigh, L3 lower thigh to the inner knee; the back of the thigh is the S2 strip.
+      if (!foot && S.fem && S.tib && p.y > S.tib.a.y) {
+        const f = frac(p, S.fem), th = around(p, at(S.fem, f), outward(p));
+        if (th < -40 && th > -160) return 'S2';
+        const fe = f - 0.18 * Math.cos(th * Math.PI / 180);           // inner side reaches the next band sooner
+        return fe < 0.1 ? 'L1' : fe < 0.5 ? 'L2' : 'L3';
+      }
+      // Leg: L4 inner shin and inner calf down to the inner ankle, L5 outer shin (to the top of the foot),
+      // S1 outer back of the calf to the heel and outer foot, S2 the upper middle strip of the calf.
+      if (!foot && S.tib && S.fib && p.y > Math.min(S.tib.b.y, S.fib.b.y)) {
+        const f = frac(p, S.tib);
+        const t = at(S.tib, f), b = at(S.fib, frac(p, S.fib));
+        const th = around(p, t.clone().add(b).multiplyScalar(0.5), b.clone().sub(t));
+        if (th >= -10 && th < 105) return 'L5';                        // outer half of the shin
+        if (th >= 105 || th <= -160) return 'L4';                       // inner half of the shin
+        if (th <= -120) return 'L4';
+        if (th <= -75) return f < 0.6 ? 'S2' : 'S1';
+        return 'S1';
+      }
+      if (foot && S.mt1 && S.mt5) {
         const u = across(p, S.mt5, S.mt1);
         if (/Sole|arch|Plantar/.test(path + n)) return u > 0.55 ? 'L5' : 'S1';
         return u > 0.88 ? 'L4' : u > 0.2 ? 'L5' : 'S1';
@@ -183,7 +216,7 @@ export function addDermatomes(model, { THREE }) {
     // perineum
     if (/Anal region/.test(n)) return 'S4';
     if (/Urogenital/.test(n)) return 'S3';
-    if (/Sacral region/.test(n)) return 'S3';
+    if (/Sacral region/.test(n)) return anus && Math.hypot(p.x - anus.x, p.y - anus.y) < 0.085 ? 'S3' : 'S2';
     if (/Umbilicus/.test(n)) return 'T10';
     // trunk (thorax, abdomen, back)
     const t = trunkLevel(p, /Lumbar region/.test(n) ? 15 : 13);
