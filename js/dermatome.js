@@ -63,16 +63,21 @@ export function addDermatomes(model, { THREE }) {
   const yAnt = (k) => {
     if (k <= ka[0]) return ant[ka[0]] + (ant[ka[0]] - ant[ka[1]]) / (ka[1] - ka[0]) * (ka[0] - k);
     for (let i = 0; i < ka.length - 1; i++) if (k <= ka[i + 1]) return ant[ka[i]] + (ant[ka[i + 1]] - ant[ka[i]]) * (k - ka[i]) / (ka[i + 1] - ka[i]);
-    return ant[ka[ka.length - 1]];
+    return ant[ka[ka.length - 1]] - 0.05 * (k - ka[ka.length - 1]);   // lumbar bands continue onto the hip and thigh
   };
   const vy = (name) => (vert[name] ? vert[name].y : null);
+  const sacrum = box('Sacrum');
   const yPost = (k) => {                        // posterior: about one vertebra below the same-numbered body
+    if (k >= 17 && sacrum) return sacrum.max.y - 0.02;
     const name = k <= 11 ? 'T' + (k + 1) : k === 12 ? 'L1' : 'L' + Math.min(5, k - 11);
     return vy(name);
   };
   const trunkLevel = (p, maxK = 13) => {
+    // Each band follows its intercostal / subcostal nerve: highest at the spine, then running steadily
+    // outward and downward around the flank to its lower end at the front. `a` is how far round the
+    // body the point is (0 = spine, 0.5 = side, 1 = front midline).
     const lat = Math.abs(p.x - x0), dz = p.z - zc;
-    const a = Math.min(1, Math.max(0, 0.5 + 0.5 * dz / Math.hypot(dz, lat * 1.2)));     // 0 back, 1 front
+    const a = Math.atan2(lat * 1.4, -dz) / Math.PI;
     let best = null, bd = 1e9;
     for (let k = 1; k <= maxK; k++) {
       const y = yPost(k) + (yAnt(k) - yPost(k)) * a;
@@ -119,6 +124,16 @@ export function addDermatomes(model, { THREE }) {
   const tempR = ctr('Temporal bone (right)'), mand = box('Mandible');
   const eyeY = orb ? orb.y : 0, mouthY = oral ? oral.y : 0, earZ = tempR ? tempR.z : 0;
   const jawY = mand ? mand.min.y + 0.02 : 0;
+
+  // Buttock and sacrum: rings around the anus (S3 inner, S2, S1 outer); above them the lumbar bands
+  // keep coming down from the spine over the top of the buttock.
+  const buttock = (p) => {
+    const r = Math.hypot(p.x - anus.x, p.y - anus.y);
+    if (r < 0.085) return 'S3';
+    if (r < 0.13) return 'S2';
+    if (r < 0.165) return 'S1';
+    return trunkLevel(p, 17);
+  };
 
   // ---------------------------------------------------------------- classification
   function classify(p, part) {
@@ -177,11 +192,10 @@ export function addDermatomes(model, { THREE }) {
     if (/Regions of lower limb/.test(path)) {
       if (/Gluteal/.test(n)) {
         // rings around the anus: S3 inner buttock, S2 outer buttock; the top of the buttock is L1–L2
+        if (anus) return buttock(p);
         const b = box(`Gluteal region (${side})`) || box(n);
         const h = b ? (p.y - b.min.y) / (b.max.y - b.min.y) : 0.5;
-        if (h > 0.72) return 'L2';
-        if (anus) return Math.hypot(p.x - anus.x, p.y - anus.y) < 0.085 ? 'S3' : 'S2';
-        return lat < 0.07 ? 'S3' : 'S2';
+        return h > 0.72 ? 'L2' : lat < 0.07 ? 'S3' : 'S2';
       }
       if (/Medial malleolus|Medial retromalleolar|Medial border of foot/.test(n)) return 'L4';
       if (/Lateral malleolus|Lateral retromalleolar|Lateral border of foot|Heel/.test(n)) return 'S1';
@@ -216,10 +230,10 @@ export function addDermatomes(model, { THREE }) {
     // perineum
     if (/Anal region/.test(n)) return 'S4';
     if (/Urogenital/.test(n)) return 'S3';
-    if (/Sacral region/.test(n)) return anus && Math.hypot(p.x - anus.x, p.y - anus.y) < 0.085 ? 'S3' : 'S2';
+    if (/Sacral region/.test(n)) return anus ? buttock(p) : 'S3';
     if (/Umbilicus/.test(n)) return 'T10';
     // trunk (thorax, abdomen, back)
-    const t = trunkLevel(p, /Lumbar region/.test(n) ? 15 : 13);
+    const t = trunkLevel(p, /Lumbar region/.test(n) ? 17 : 13);
     return t;
   }
 
