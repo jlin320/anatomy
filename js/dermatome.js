@@ -115,6 +115,13 @@ export function addDermatomes(model, { THREE }) {
       hum: axis(`Humerus (${s})`), rad: axis(`Radius (${s})`), uln: axis(`Ulna (${s})`), fem: axis(`Femur (${s})`),
       tib: axis(`Tibia (${s})`), fib: axis(`Fibula (${s})`),
       mc1: ctr(`First metacarpal bone (${s})`), mc5: ctr(`Fifth metacarpal bone (${s})`),
+      // each finger's bones (metacarpal + phalanges) -> its dermatome: thumb C6, index & middle C7, ring & little C8
+      digits: ['first', 'second', 'third', 'fourth', 'fifth'].flatMap((o, i) => {
+        const lv = i === 0 ? 'C6' : i < 3 ? 'C7' : 'C8';
+        const O = o[0].toUpperCase() + o.slice(1);
+        return [`${O} metacarpal bone (${s})`, ...['Proximal', 'Middle', 'Distal'].map((ph) => `${ph} phalanx of ${o} finger of hand (${s})`)]
+          .map((nm) => ctr(nm)).filter(Boolean).map((c) => ({ c, lv }));
+      }),
       mt1: ctr(`First metatarsal bone (${s})`), mt5: ctr(`Fifth metatarsal bone (${s})`),
     };
   }
@@ -172,7 +179,11 @@ export function addDermatomes(model, { THREE }) {
     // C7 also takes the middle strip of the back of the forearm.
     if (/Regions of upper limb/.test(path)) {
       if (/Deltoid/.test(n)) return 'C5';
-      if (/Regions of hand/.test(path) && S.mc1 && S.mc5) { const u = across(p, S.mc5, S.mc1); return u > 0.6 ? 'C6' : u > 0.28 ? 'C7' : 'C8'; }
+      if (/Regions of hand/.test(path) && S.digits.length) {            // nearest finger bone decides
+        let best = null, bd = 1e9;
+        for (const d of S.digits) { const dd = p.distanceToSquared(d.c); if (dd < bd) { bd = dd; best = d.lv; } }
+        return best;
+      }
       if (S.hum && p.y > S.hum.b.y + 0.01) {                            // upper arm
         const f = frac(p, S.hum), th = around(p, at(S.hum, f), outward(p));
         if (th > -100 && th < 85) return 'C5';                          // outer half of the front, outer side, most of the back
