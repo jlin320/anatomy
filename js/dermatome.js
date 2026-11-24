@@ -175,16 +175,17 @@ export function addDermatomes(model, { THREE }) {
       if (/Regions of hand/.test(path) && S.mc1 && S.mc5) { const u = across(p, S.mc5, S.mc1); return u > 0.6 ? 'C6' : u > 0.28 ? 'C7' : 'C8'; }
       if (S.hum && p.y > S.hum.b.y + 0.01) {                            // upper arm
         const f = frac(p, S.hum), th = around(p, at(S.hum, f), outward(p));
-        if (Math.cos(th * Math.PI / 180) > -0.3) return 'C5';
-        return f < 0.55 ? 'T2' : 'T1';
+        if (th > -100 && th < 85) return 'C5';                          // outer half of the front, outer side, most of the back
+        return f < 0.25 ? 'T2' : 'T1';                                  // long T1 strip down the inner front of the arm
       }
-      if (S.rad && S.uln) {                                             // elbow, forearm, wrist
+      if (S.rad && S.uln) {                                             // elbow, forearm, wrist: strips run lengthwise
         const f = frac(p, S.rad);
         const r = at(S.rad, f), u = at(S.uln, frac(p, S.uln));
         const th = around(p, r.clone().add(u).multiplyScalar(0.5), r.clone().sub(u));
-        if (th < -55 && th > -125 && f > 0.25) return 'C7';            // middle of the back of the forearm
-        if (Math.cos(th * Math.PI / 180) > -0.1) return 'C6';
-        return f < 0.45 ? 'T1' : 'C8';
+        if (th < -55 && th > -125) return 'C7';                         // middle of the back of the forearm
+        if (Math.cos(th * Math.PI / 180) > -0.1) return 'C6';           // thumb side
+        if (th <= -125) return 'C8';                                    // back of the little-finger side
+        return f > 0.75 ? 'C8' : 'T1';                                  // front of the little-finger side
       }
       return 'C6';
     }
@@ -204,8 +205,10 @@ export function addDermatomes(model, { THREE }) {
       // thigh, L3 lower thigh to the inner knee; the back of the thigh is the S2 strip.
       if (!foot && S.fem && S.tib && p.y > S.tib.a.y) {
         const f = frac(p, S.fem), th = around(p, at(S.fem, f), outward(p));
-        if (th < -40 && th > -160) return 'S2';
-        const fe = f - 0.18 * Math.cos(th * Math.PI / 180);           // inner side reaches the next band sooner
+        if (th < -55 && th > -160) return 'S2';                         // back of the thigh: long middle strip
+        if (th <= -25 && th >= -55) return 'S1';                        // outer back strip, continues down the calf
+        // front: stripes twist down the thigh, from the outer hip to the inner knee
+        const fe = f - 0.4 * Math.cos(th * Math.PI / 180);
         return fe < 0.1 ? 'L1' : fe < 0.5 ? 'L2' : 'L3';
       }
       // Leg: L4 inner shin and inner calf down to the inner ankle, L5 outer shin (to the top of the foot),
@@ -216,14 +219,14 @@ export function addDermatomes(model, { THREE }) {
         const th = around(p, t.clone().add(b).multiplyScalar(0.5), b.clone().sub(t));
         if (th >= -10 && th < 105) return 'L5';                        // outer half of the shin
         if (th >= 105 || th <= -160) return 'L4';                       // inner half of the shin
-        if (th <= -120) return 'L4';
-        if (th <= -75) return f < 0.6 ? 'S2' : 'S1';
-        return 'S1';
+        if (th <= -125) return 'L4';
+        if (th <= -65) return f < 0.85 ? 'S2' : 'S1';                   // middle of the calf, down to above the heel
+        return 'S1';                                                    // outer back of the calf
       }
       if (foot && S.mt1 && S.mt5) {
         const u = across(p, S.mt5, S.mt1);
         if (/Sole|arch|Plantar/.test(path + n)) return u > 0.55 ? 'L5' : 'S1';
-        return u > 0.88 ? 'L4' : u > 0.2 ? 'L5' : 'S1';
+        return u > 1.05 ? 'L4' : u > 0.15 ? 'L5' : 'S1';               // top of the foot and big toe L5, inner edge L4
       }
       return 'L3';
     }
