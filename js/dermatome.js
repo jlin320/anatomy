@@ -142,6 +142,30 @@ export function addDermatomes(model, { THREE }) {
     return trunkLevel(p, 17);
   };
 
+  // Upper back: the C5, C6, C7, C8 and T1 bands start at the spine at the base of the neck and fan out
+  // over the shoulder blade to the shoulder, where they become the strips that run down the arm.
+  // Band k's lower edge runs straight from the spine (between vertebrae) to the back of the shoulder.
+  const yv = (k) => (vert[k] ? vert[k].y : null);
+  const FAN = ['C4', 'C5', 'C6', 'C7', 'C8', 'T1'];
+  const fanSpine = [yv('C5'), yv('C6'), yv('C7'), yv('T1'), (yv('T1') + yv('T2')) / 2, (yv('T2') + yv('T3')) / 2];
+  const fanShoulder = {};
+  for (const s of ['right', 'left']) {
+    const sc = box(`Scapula (${s})`), hum = L[s].hum;
+    if (!sc || !hum) continue;
+    const yAc = sc.max.y, yAx = hum.a.y - 0.35 * hum.len, H = yAc - yAx;
+    fanShoulder[s] = {
+      lat: Math.max(Math.abs(sc.min.x - x0), Math.abs(sc.max.x - x0)),
+      edge: [yAc + 0.01, yAc - 0.15 * H, yAc - 0.35 * H, yAc - 0.6 * H, yAc - 0.85 * H, yAx - 0.02],
+    };
+  }
+  const fan = (p, side) => {
+    const F = fanShoulder[side];
+    if (!F || fanSpine.some((y) => y == null)) return null;
+    const t = Math.min(1, Math.abs(p.x - x0) / F.lat);
+    for (let i = 0; i < FAN.length; i++) if (p.y >= fanSpine[i] + (F.edge[i] - fanSpine[i]) * t) return FAN[i];
+    return null;                                                    // below T1: the ordinary trunk bands
+  };
+
   // ---------------------------------------------------------------- classification
   function classify(p, part) {
     const path = model.pathOf(part).join(' / ');
@@ -168,6 +192,7 @@ export function addDermatomes(model, { THREE }) {
     if (/Regions of neck/.test(path)) {
       if (/Submental|Submandibular/.test(n)) return 'C3';
       if (/supraclavicular/i.test(n)) return 'C4';
+      if (p.z < zc) { const k = fan(p, side); if (k && k !== 'C4') return k; }   // base of the back of the neck
       return vert.C4 && p.y > vert.C4.y ? 'C3' : 'C4';
     }
     // upper limb
@@ -178,25 +203,31 @@ export function addDermatomes(model, { THREE }) {
     // (postaxial) side runs back up C8 (lower forearm) → T1 (upper forearm, elbow) → T2 (inner arm, axilla);
     // C7 also takes the middle strip of the back of the forearm.
     if (/Regions of upper limb/.test(path)) {
-      if (/Deltoid/.test(n)) return 'C5';
+      if (/Deltoid/.test(n)) return (S.hum && p.z < S.hum.a.z && fan(p, side)) || 'C5';   // back of the shoulder: the fan
       if (/Regions of hand/.test(path) && S.digits.length) {            // nearest finger bone decides
         let best = null, bd = 1e9;
         for (const d of S.digits) { const dd = p.distanceToSquared(d.c); if (dd < bd) { bd = dd; best = d.lv; } }
         return best;
       }
+      // Arm and forearm: the same strips run the whole length, continuing the bands that come over the
+      // shoulder from the spine. Around the limb: C6 outer edge, C5 (arm) / C6 (forearm) outer front,
+      // T1 inner front (C8 on the lower forearm), C8 inner back, C7 the middle of the back.
+      const strip = (th, f, upper) => {
+        if (th >= -20 && th <= 25) return 'C6';
+        if (th > 25 && th <= 105) return upper ? 'C5' : 'C6';
+        if (th > 105) return upper ? (f < 0.25 ? 'T2' : 'T1') : (f < 0.5 ? 'T1' : 'C8');
+        if (th < -140) return upper ? 'T1' : 'C8';
+        if (th < -95) return 'C8';
+        return 'C7';
+      };
       if (S.hum && p.y > S.hum.b.y + 0.01) {                            // upper arm
-        const f = frac(p, S.hum), th = around(p, at(S.hum, f), outward(p));
-        if (th > -100 && th < 85) return 'C5';                          // outer half of the front, outer side, most of the back
-        return f < 0.25 ? 'T2' : 'T1';                                  // long T1 strip down the inner front of the arm
+        const f = frac(p, S.hum);
+        return strip(around(p, at(S.hum, f), outward(p)), f, true);
       }
-      if (S.rad && S.uln) {                                             // elbow, forearm, wrist: strips run lengthwise
+      if (S.rad && S.uln) {                                             // elbow, forearm, wrist
         const f = frac(p, S.rad);
         const r = at(S.rad, f), u = at(S.uln, frac(p, S.uln));
-        const th = around(p, r.clone().add(u).multiplyScalar(0.5), r.clone().sub(u));
-        if (th < -55 && th > -125) return 'C7';                         // middle of the back of the forearm
-        if (Math.cos(th * Math.PI / 180) > -0.1) return 'C6';           // thumb side
-        if (th <= -125) return 'C8';                                    // back of the little-finger side
-        return f > 0.75 ? 'C8' : 'T1';                                  // front of the little-finger side
+        return strip(around(p, r.clone().add(u).multiplyScalar(0.5), r.clone().sub(u)), f, false);
       }
       return 'C6';
     }
@@ -247,7 +278,8 @@ export function addDermatomes(model, { THREE }) {
     if (/Urogenital/.test(n)) return 'S3';
     if (/Sacral region/.test(n)) return anus ? buttock(p) : 'S3';
     if (/Umbilicus/.test(n)) return 'T10';
-    // trunk (thorax, abdomen, back)
+    // trunk (thorax, abdomen, back); the upper back takes the C5–T1 fan first
+    if (p.z < zc) { const k = fan(p, side); if (k) return k; }
     const t = trunkLevel(p, /Lumbar region/.test(n) ? 17 : 13);
     return t;
   }
